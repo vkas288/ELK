@@ -1,0 +1,88 @@
+# 1. FileBeat -> Logstash -> ElasticSearch -> Kibana
+
+##################
+#### FileBeat ####
+##################
+
+# 2.1 Edit filebeat.yml file located in your Filebeat installation directory (/etc/{beatname}/{beatname}.yml) with the following lines
+	filebeat.prospectors:
+	- type: log
+	  paths:
+		- /absolute/path/to/file/logstash-tutorial.log
+	output.logstash:
+	  hosts: ["localhost:5044"]
+ 
+# 2.2 At the data source machine, run Filebeat with the following command:
+$> sudo ./filebeat -e -c filebeat.yml -d "publish"
+
+# 2.3 You do need to force Filebeat to read the log file from scratch. To do this, go to the terminal window where Filebeat is running and press Ctrl+C to shut down Filebeat. Then delete the Filebeat registry file. For example, run:
+$> sudo rm data/registry
+# Since Filebeat stores the state of each file it harvests in the registry, deleting the registry file forces Filebeat to read all the files it’s harvesting from scratch.
+# Next, restart Filebeat with the following command:
+$> sudo ./filebeat -e -c filebeat.yml -d "publish"
+
+# 2.4 The Beats shipper automatically sets the type field on the event. You cannot override this setting in the Logstash config. If you specify a setting for the type config option in Logstash, it is ignored.
+
+##################
+#### Logstash ####
+##################
+
+# 3.1 Logstash configuration pipeline named first-pipeline.conf in your home Logstash directory (/etc/logstash/conf.d).
+# Logstash tries to load only files with .conf extension in the /etc/logstash/conf.d directory and ignores all other files.
+# Input -> Filter (optional) -> Outout
+	input {
+		beats {
+			port => "5044"
+		}
+	}
+	filter {
+		grok {
+			match => { "message" => "%{COMBINEDAPACHELOG}"}
+		}
+		geoip {
+			source => "clientip"
+		}
+	}
+	output {
+		elasticsearch {
+			hosts => [ "localhost:9200" ]
+		}
+	}
+
+# 3.2 filters are evaluated in sequence, make sure that the geoip section is after the grok section of the configuration file and that both the grok and geoip sections are nested within the filter section.
+
+# 3.3 To verify your configuration, run the following command:
+$> bin/logstash -f first-pipeline.conf --config.test_and_exit
+
+# 3.4 If the configuration file passes the configuration test, start Logstash with the following command:
+$> bin/logstash -f first-pipeline.conf --config.reload.automatic
+# The --config.reload.automatic option enables automatic config reloading so that you don’t have to stop and restart Logstash every time you modify the configuration file.
+# By default, Logstash checks for configuration changes every 3 seconds. To change this interval, use the --config.reload.interval <interval> option, where interval specifies how often Logstash checks the config files for changes.
+# The grok filter plugin enables you to parse the unstructured log data into something structured and queryable.
+
+# 3.5 To see a list of available indexes, use this query:
+$> curl 'localhost:9200/_cat/indices?v'
+
+# 3.6 To configure your Logstash instance to write to multiple Elasticsearch nodes, edit the output section of the second-pipeline.conf file to read:
+	output {
+		elasticsearch {
+			hosts => ["IP Address 1:port1", "IP Address 2:port2", "IP Address 3"]
+		}
+	}
+# When the hosts parameter lists multiple IP addresses, Logstash load-balances requests across the list of addresses. Default port for Elasticsearch is 9200 and can be omitted in the configuration above.
+
+# 3.7 Directory structure https://www.elastic.co/guide/en/logstash/current/dir-layout.html
+
+# 3.8 comand to start logstash
+$> sudo systemctl start logstash.service
+$> systemctl stop logstash
+
+# 3.9 To run more than one pipeline in the same process, edit configuration file called pipelines.yml placed in the path.settings folder 
+	- pipeline.id: my-pipeline_1
+	  path.config: "/etc/path/to/p1.config"
+	  pipeline.workers: 3
+	- pipeline.id: my-other-pipeline
+	  path.config: "/etc/different/path/p2.cfg"
+	  queue.type: persisted
+# Example shows two different pipelines described by their IDs and configuration paths. For the first pipeline, the value of pipeline.workers is set to 3, while in the other, the persistent queue feature is enabled. The value of a setting that is not explicitly set in the pipelines.yml file will fall back to the default specified in the logstash.yml settings file.
+# When you start Logstash without arguments, it will read the pipelines.yml file and instantiate all pipelines specified in the file. On the other hand, when you use -e or -f, Logstash ignores the pipelines.yml file and logs a warning about it.
